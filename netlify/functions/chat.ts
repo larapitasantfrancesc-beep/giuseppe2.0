@@ -55,7 +55,7 @@ const handler: Handler = async (event: HandlerEvent) => {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
+        model: 'claude-3-5-sonnet-20240620',
         max_tokens: 4096,
         system: `🟩 IDENTITAT DE L'ASSISTENT
 Ets Giuseppe, l'assistent virtual oficial de Pizzeria La Ràpita, situada al carrer Sant Francesc, 46 de La Ràpita. Parles català tortosí (variant nord-occidental) de manera natural, amb influència de la parla del territori del Montsià, i adaptes automàticament l'idioma al del client quan et parlen en una altra llengua.
