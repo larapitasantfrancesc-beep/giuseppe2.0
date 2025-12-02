@@ -263,13 +263,19 @@ ENTRE SETMANA (DILLUNS—DIJOUS) — NOMÉS ONLINE:
     }
 
     const data = await response.json();
-    const botResponse = data.content[0].text || 'Ho sento, no he pogut generar una resposta.';
-
+    let botResponse = data.content[0].text || 'Ho sento, no he pogut generar una resposta.';
+    
+    // Guardar la resposta original per processar Supabase
+    const originalResponse = botResponse;
+    
     // Detectar si hi ha una comanda JSON en la resposta i guardar-la a Supabase
-    if (botResponse.includes('COMANDA_JSON:') && supabase) {
+    if (originalResponse.includes('COMANDA_JSON:') && supabase) {
       try {
-        // Extreure el JSON
-        const jsonMatch = botResponse.match(/COMANDA_JSON:\s*(\{.*\})/);
+        // Eliminar JSON de la resposta visible al client
+        botResponse = botResponse.split('COMANDA_JSON:')[0].trim();
+        
+        // Extreure el JSON de la resposta original
+        const jsonMatch = originalResponse.match(/COMANDA_JSON:\s*(\{.*\})/);
         if (jsonMatch) {
           const orderData = JSON.parse(jsonMatch[1]);
           
