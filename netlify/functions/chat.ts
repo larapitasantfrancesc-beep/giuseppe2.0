@@ -36,16 +36,30 @@ const handler: Handler = async (event: HandlerEvent) => {
       };
     }
 
-    // Buscar informació de client si hi ha un telèfon al missatge
+    // Buscar informació de client si hi ha un telèfon al missatge o a l'historial
     let clientInfo = null;
-    const telefonMatch = message.match(/\b\d{9}\b/); // Buscar 9 dígits
+    let telefonMatch = message.match(/\b\d{9}\b/); // Buscar 9 dígits al missatge actual
+
+    // Si no trobem telèfon al missatge actual, buscar a l'historial
+    if (!telefonMatch && history && history.length > 0) {
+      for (let i = history.length - 1; i >= 0; i--) {
+        const msg = history[i];
+        if (msg.role === 'user') {
+          const match = msg.parts[0].text.match(/\b\d{9}\b/);
+          if (match) {
+            telefonMatch = match;
+            break;
+          }
+        }
+      }
+    }
     
     if (telefonMatch && supabase) {
       try {
         const telefon = telefonMatch[0];
         const { data: clientData } = await supabase
           .from('clients')
-          .select('*, preferencies_clients(*)')
+          .select('*')
           .eq('telefon', telefon)
           .order('ultima_comanda_at', { ascending: false })
           .limit(1)
@@ -116,14 +130,14 @@ ${clientInfo.adreca ? `• Adreça habitual: ${clientInfo.adreca}` : ''}
 ${clientInfo.pizza_preferida ? `• Pizza preferida: ${clientInfo.pizza_preferida} (demanada ${clientInfo.vegades_pizza} vegades)` : ''}
 
 IMPORTANT: 
-- Saluda'l pel nom! "Hola ${clientInfo.nom}!"
+- Saluda'l pel nom! "Hola de nou, ${clientInfo.nom}!"
 - NO demanis el nom ni el telèfon (ja els tens)
-${clientInfo.adreca ? `- Si és domicili, NO demanis l'adreça (usa: ${clientInfo.adreca})` : ''}
-${clientInfo.pizza_preferida ? `- Pots suggerir-li la seva pizza preferida: "${clientInfo.pizza_preferida}"` : ''}
+${clientInfo.adreca ? `- Si és domicili, confirma l'adreça: "Com sempre, a ${clientInfo.adreca}?"` : ''}
+${clientInfo.pizza_preferida ? `- Pots suggerir-li la seva pizza preferida: "Vols la teva ${clientInfo.pizza_preferida} de sempre?"` : ''}
 - Sigues proper i natural, com si fos un client habitual
 
 Exemples:
-- "Hola ${clientInfo.nom}! Què et prepare avui?"
+- "Hola de nou, ${clientInfo.nom}! Què et prepare avui?"
 ${clientInfo.pizza_preferida ? `- "Vols la teva ${clientInfo.pizza_preferida} de sempre?"` : ''}
 ${clientInfo.adreca ? `- "Com sempre, a ${clientInfo.adreca}?"` : ''}`;
     }
@@ -224,7 +238,7 @@ Frase recomanada:
 Quan un client vol fer una comanda, Giuseppe ha de demanar:
 
 ${clientInfo ? `
-NOTA: Aquest és un client conegut, ja tens:
+NOTA: Aquest és un client conegut (${clientInfo.nom}), ja tens:
 - Nom: ${clientInfo.nom}
 - Telèfon: ${clientInfo.telefon}
 ${clientInfo.adreca ? `- Adreça: ${clientInfo.adreca}` : ''}
@@ -236,8 +250,8 @@ Per clients nous, demanar:
 2. Telèfon
 `}
 3. Si és recollida o domicili
-${!clientInfo ? '4. Adreça (si és domicili)' : '4. Confirmar adreça (si és domicili i ja la tens) o demanar-la si és nou'}
-5. ${clientInfo?.pizza_preferida ? `Suggerir la seva pizza preferida (${clientInfo.pizza_preferida}) o` : ''} Pizzes i quantitats
+${!clientInfo || !clientInfo.adreca ? '4. Adreça (si és domicili)' : '4. Confirmar adreça (si és domicili)'}
+5. ${clientInfo?.pizza_preferida ? `Suggerir la seva pizza preferida (${clientInfo.pizza_preferida}) o demanar` : 'Demanar'} pizzes i quantitats
 6. ${clientInfo?.adreca && clientInfo.adreca.includes('recollida') ? 'Hora aproximada de recollida' : 'Per recollida: hora aproximada de recollida'}
 7. Extras o ingredients a retirar
 8. Al·lèrgies o intolerències
