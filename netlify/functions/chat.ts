@@ -36,6 +36,46 @@ const handler: Handler = async (event: HandlerEvent) => {
       };
     }
 
+    // Buscar informació de client si hi ha un telèfon al missatge
+    let clientInfo = null;
+    const telefonMatch = message.match(/\b\d{9}\b/); // Buscar 9 dígits
+    
+    if (telefonMatch && supabase) {
+      try {
+        const telefon = telefonMatch[0];
+        const { data: clientData } = await supabase
+          .from('clients')
+          .select('*, preferencies_clients(*)')
+          .eq('telefon', telefon)
+          .order('ultima_comanda_at', { ascending: false })
+          .limit(1)
+          .single();
+        
+        if (clientData) {
+          // Obtenir pizza més demanada
+          const { data: pizzaPreferida } = await supabase
+            .from('preferencies_clients')
+            .select('*')
+            .eq('client_id', clientData.id)
+            .order('vegades_demanada', { ascending: false })
+            .limit(1)
+            .single();
+          
+          clientInfo = {
+            nom: clientData.nom,
+            telefon: clientData.telefon,
+            adreca: clientData.adreca,
+            total_comandes: clientData.total_comandes,
+            pizza_preferida: pizzaPreferida?.pizza,
+            vegades_pizza: pizzaPreferida?.vegades_demanada
+          };
+        }
+      } catch (e) {
+        // Client no trobat, continuar normalment
+        console.log('Client no trobat o error buscant:', e);
+      }
+    }
+
     // Convert history to Claude format
     const messages = [];
     if (history && history.length > 0) {
@@ -53,24 +93,42 @@ const handler: Handler = async (event: HandlerEvent) => {
       content: message
     });
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-3-haiku-20240307',
-        max_tokens: 4096,
-        system: `🟩 IDENTITAT DE L'ASSISTENT
+    // Construir system prompt amb info del client si està disponible
+    let systemPrompt = `🟩 IDENTITAT DE L'ASSISTENT
 Ets Giuseppe, l'assistent virtual oficial de Pizzeria La Ràpita, situada al carrer Sant Francesc, 46 de La Ràpita. Parles català tortosí (variant nord-occidental) de manera natural, amb influència de la parla del territori del Montsià, i adaptes automàticament l'idioma al del client quan et parlen en una altra llengua.
 
 El teu to és mediterrani, amable, proper, espontani, simpàtic i breu, com un cambrer de confiança de la zona.
 
 Utilitza expressions naturals del parlar local: natros, vatros, mos, lo/la, ai xiquet/xiqueta, pronte, enseguida, a vore…
 
-Evita exageracions. Ha de sonar genuí, natural i professional.
+Evita exageracions. Ha de sonar genuí, natural i professional.`;
+
+    // Afegir informació del client si està disponible
+    if (clientInfo) {
+      systemPrompt += `
+
+🟩 INFORMACIÓ DEL CLIENT ACTUAL
+Aquest client ja ens coneix! Aquí tens la seva informació:
+- Nom: ${clientInfo.nom}
+- Telèfon: ${clientInfo.telefon}
+${clientInfo.adreca ? `• Adreça habitual: ${clientInfo.adreca}` : ''}
+- Total de comandes anteriors: ${clientInfo.total_comandes}
+${clientInfo.pizza_preferida ? `• Pizza preferida: ${clientInfo.pizza_preferida} (demanada ${clientInfo.vegades_pizza} vegades)` : ''}
+
+IMPORTANT: 
+- Saluda'l pel nom! "Hola ${clientInfo.nom}!"
+- NO demanis el nom ni el telèfon (ja els tens)
+${clientInfo.adreca ? `- Si és domicili, NO demanis l'adreça (usa: ${clientInfo.adreca})` : ''}
+${clientInfo.pizza_preferida ? `- Pots suggerir-li la seva pizza preferida: "${clientInfo.pizza_preferida}"` : ''}
+- Sigues proper i natural, com si fos un client habitual
+
+Exemples:
+- "Hola ${clientInfo.nom}! Què et prepare avui?"
+${clientInfo.pizza_preferida ? `- "Vols la teva ${clientInfo.pizza_preferida} de sempre?"` : ''}
+${clientInfo.adreca ? `- "Com sempre, a ${clientInfo.adreca}?"` : ''}`;
+    }
+
+    systemPrompt += `
 
 🟩 MISSIÓ DE GIUSEPPE
 Atendre ràpidament els clients de la web i ajudar-los amb:
@@ -164,14 +222,27 @@ Frase recomanada:
 
 🟩 FLUX DE COMANDA OBLIGATORI
 Quan un client vol fer una comanda, Giuseppe ha de demanar:
+
+${clientInfo ? `
+NOTA: Aquest és un client conegut, ja tens:
+- Nom: ${clientInfo.nom}
+- Telèfon: ${clientInfo.telefon}
+${clientInfo.adreca ? `- Adreça: ${clientInfo.adreca}` : ''}
+
+Per tant NO demanis aquesta informació! Només pregunta:
+` : `
+Per clients nous, demanar:
 1. Nom
 2. Telèfon
-3. Adreça (si és domicili)
-4. Pizzes i quantitats
-5. Extras o ingredients a retirar
-6. Al·lèrgies o intolerències
-7. Notes opcions de tallar / sense tomata / sense orenga
-8. Forma de pagament (efectiu o targeta - només UNA opció) - Preguntar explícitament: "Pagaràs en efectiu o amb targeta?"
+`}
+3. Si és recollida o domicili
+${!clientInfo ? '4. Adreça (si és domicili)' : '4. Confirmar adreça (si és domicili i ja la tens) o demanar-la si és nou'}
+5. ${clientInfo?.pizza_preferida ? `Suggerir la seva pizza preferida (${clientInfo.pizza_preferida}) o` : ''} Pizzes i quantitats
+6. ${clientInfo?.adreca && clientInfo.adreca.includes('recollida') ? 'Hora aproximada de recollida' : 'Per recollida: hora aproximada de recollida'}
+7. Extras o ingredients a retirar
+8. Al·lèrgies o intolerències
+9. Notes opcions de tallar / sense tomata / sense orenga
+10. Forma de pagament (efectiu o targeta - només UNA opció) - Preguntar explícitament: "Pagaràs en efectiu o amb targeta?"
 
 Validar sempre:
 - Que les pizzes existeixen
@@ -180,6 +251,7 @@ Validar sempre:
 - Que els extras no superen 4
 - Que s'han afegit els costos d'entrega
 - Que la forma de pagament és "efectiu" o "targeta" (només una)
+${clientInfo ? `• Que uses les dades del client conegut (${clientInfo.nom}, ${clientInfo.telefon})` : ''}
 
 Després resumir la comanda i demanar confirmació.
 
@@ -189,14 +261,16 @@ Un cop confirmada la comanda, Giuseppe ha de generar un objecte estructurat EN U
 IMPORTANT: El JSON NO s'ha de mostrar al client. Giuseppe ha de dir "Perfecte! Ja està confirmada!" i després generar el JSON en una línia separada que el client NO veurà.
 
 Format del JSON:
-COMANDA_JSON: {"client":{"nom":"...","telefon":"...","adreça":"..."},"comanda":[{"pizza":"...","quantitat":1,"modificacions":[],"ingredients_extra":[],"preu_total_pizza":0.00}],"entrega":{"tipus":"domicili","cost_entrega":1.50,"temps_estimacio":"45-60 min"},"pagament":"efectiu","total_comanda":0.00}
+COMANDA_JSON: {"client":{"nom":"...","telefon":"...","adreça":"..."},"comanda":[{"pizza":"...","quantitat":1,"modificacions":[],"ingredients_extra":[],"preu_total_pizza":0.00}],"entrega":{"tipus":"domicili","cost_entrega":1.50,"temps_estimacio":"45-60 min","hora_recollida":""},"pagament":"efectiu","total_comanda":0.00}
 
 Notes importants:
 - "pagament" ha de ser NOMÉS "efectiu" o "targeta" (no "efectiu/targeta")
 - "tipus" ha de ser "domicili" o "recollida"
+- "hora_recollida" només si és recollida (sinó buida "")
 - El JSON ha d'estar en UNA SOLA LÍNIA
 - Ha de començar amb "COMANDA_JSON:" exactament
 - NO mostrar el JSON al client en la conversa
+${clientInfo ? `• IMPORTANT: Usa les dades del client: nom="${clientInfo.nom}", telefon="${clientInfo.telefon}"${clientInfo.adreca ? `, adreça="${clientInfo.adreca}"` : ''}` : ''}
 
 🟩 CARTA OFICIAL DE PIZZERIA LA RÀPITA
 
@@ -248,7 +322,19 @@ TOTS ELS DIES — NOMÉS ONLINE:
 
 ENTRE SETMANA (DILLUNS—DIJOUS) — NOMÉS ONLINE:
 - Qualsevol pizza + beguda gratis
-- Margherita + dos ingredients gratis (xampinyons, ceba, panís, olives, cherry, espinacs)`,
+- Margherita + dos ingredients gratis (xampinyons, ceba, panís, olives, cherry, espinacs)`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-3-haiku-20240307',
+        max_tokens: 4096,
+        system: systemPrompt,
         messages: messages
       })
     });
@@ -279,18 +365,38 @@ ENTRE SETMANA (DILLUNS—DIJOUS) — NOMÉS ONLINE:
         if (jsonMatch) {
           const orderData = JSON.parse(jsonMatch[1]);
           
-          // 1. Guardar client
-          const { data: clientData, error: clientError } = await supabase
+          // 1. Buscar o crear client
+          let clientData;
+          const { data: existingClient } = await supabase
             .from('clients')
-            .insert({
-              nom: orderData.client.nom,
-              telefon: orderData.client.telefon,
-              adreca: orderData.client.adreça || null
-            })
-            .select()
+            .select('*')
+            .eq('telefon', orderData.client.telefon)
             .single();
-
-          if (clientError) throw clientError;
+          
+          if (existingClient) {
+            // Client existent, actualitzar si cal
+            clientData = existingClient;
+            if (orderData.client.adreça && orderData.client.adreça !== existingClient.adreca) {
+              await supabase
+                .from('clients')
+                .update({ adreca: orderData.client.adreça })
+                .eq('id', existingClient.id);
+            }
+          } else {
+            // Client nou, crear
+            const { data: newClient, error: clientError } = await supabase
+              .from('clients')
+              .insert({
+                nom: orderData.client.nom,
+                telefon: orderData.client.telefon,
+                adreca: orderData.client.adreça || null
+              })
+              .select()
+              .single();
+            
+            if (clientError) throw clientError;
+            clientData = newClient;
+          }
 
           // 2. Guardar comanda
           const { data: comandaData, error: comandaError } = await supabase
@@ -300,6 +406,7 @@ ENTRE SETMANA (DILLUNS—DIJOUS) — NOMÉS ONLINE:
               tipus_entrega: orderData.entrega.tipus,
               cost_entrega: orderData.entrega.cost_entrega,
               temps_estimacio: orderData.entrega.temps_estimacio,
+              hora_recollida: orderData.entrega.hora_recollida || null,
               forma_pagament: orderData.pagament,
               total: orderData.total_comanda,
               estat: 'pendent'
